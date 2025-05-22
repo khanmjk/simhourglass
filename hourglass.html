@@ -106,10 +106,10 @@
         const messageArea = document.getElementById('messageArea');
 
         // Simulation constants
-        const NUM_SAND_PARTICLES = 1500; // Value from user's screenshot context
-        const SAND_GRAIN_RADIUS = 2.8; 
+        const NUM_SAND_PARTICLES = 1600; 
+        const SAND_GRAIN_RADIUS = 1.85; 
         const NECK_OPENING_WIDTH = (SAND_GRAIN_RADIUS * 2) * 1.25; 
-        const TARGET_DRAIN_TIME_S = 20.0; 
+        const TARGET_DRAIN_TIME_S = 60.0; 
 
         particleCountInfo.textContent = NUM_SAND_PARTICLES;
         targetTimerCount.textContent = TARGET_DRAIN_TIME_S;
@@ -145,11 +145,12 @@
         let timeUp = false;
 
         function setupSimulation() {
-            engine = Engine.create();
+            // REVERTED: engine.enableSleeping is true by default.
+            engine = Engine.create(); 
             engine.world.gravity.y = 1;
-            engine.positionIterations = 8; 
-            engine.velocityIterations = 6; 
-            engine.timing.timeScale = 0.9; 
+            engine.positionIterations = 20; 
+            engine.velocityIterations = 10 
+            engine.timing.timeScale = 0.8; 
 
             render = Render.create({
                 element: simulationContainer,
@@ -191,7 +192,6 @@
             };
 
             const innerNeckX = NECK_OPENING_WIDTH / 2; 
-            // Reverted to original definition as per user feedback for silhouette
             const funnelNeckInterfaceX = innerNeckX + SAND_GRAIN_RADIUS * 0.75 + 17;
 
             function createFunnelWall(p1, p2, label, outwardAngleOffset) {
@@ -233,8 +233,10 @@
 
             const particleOptions = {
                 friction: 0.55,
-                restitution: 0.01,
+                restitution: 0, 
                 density: 0.0045,
+                frictionAir: 0.02, 
+                // REVERTED: isSleeping: true, 
                 render: { fillStyle: '#D2B48C' }
             };
 
@@ -242,9 +244,7 @@
             let spawnChamber_RefCapX, spawnChamber_RefNeckX; 
             let y_spawn_particle_min_local, y_spawn_particle_max_local; 
 
-            // ADJUSTED MARGIN: Provides more space between particle edge and wall
-            // Old value: SAND_GRAIN_RADIUS * 1.1
-            const particleRadiusMargin = SAND_GRAIN_RADIUS * 1.5; 
+            const particleRadiusMargin = SAND_GRAIN_RADIUS * 2.0; 
 
             if (!isFlippedState) { 
                 spawnChamber_RefCapY = funnelTopStartY;         
