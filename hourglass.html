@@ -106,9 +106,8 @@
         const messageArea = document.getElementById('messageArea');
 
         // Simulation constants
-        const NUM_SAND_PARTICLES = 2000; //was 1200
+        const NUM_SAND_PARTICLES = 1500; //was 1200
         const SAND_GRAIN_RADIUS = 2.8 //was 2.8;
-        // --- MODIFIED LINE: Slightly widened NECK_OPENING_WIDTH to improve flow ---
         const NECK_OPENING_WIDTH = (SAND_GRAIN_RADIUS * 2)*1.25; // Was 6.0 then 6.3
         const TARGET_DRAIN_TIME_S = 20.0; 
 
@@ -126,6 +125,7 @@
         const hgCenterY = canvasHeight / 2; 
 
         const bulbHeight = (hgTotalVisualHeight - hgNeckHeight) / 2; 
+        const innerBulbX = hgBulbMaxWidth / 2; // MOVED innerBulbX HERE
         const neckTopY = -hgNeckHeight / 2;    
         const neckBottomY = hgNeckHeight / 2;   
         const funnelTopEndY = neckTopY;       
@@ -185,13 +185,13 @@
             const parts = [];
             const wallOptions = {
                 isStatic: true,
-                friction: 0.1, // was 0.05, 
+                friction: 0.1, 
                 restitution: 0.01, 
                 render: { fillStyle: '#c0c0c0', strokeStyle: '#aaaaaa', lineWidth: 0 }
             };
 
             const innerNeckX = NECK_OPENING_WIDTH / 2; 
-            const innerBulbX = hgBulbMaxWidth / 2;
+            // const innerBulbX = hgBulbMaxWidth / 2; // REMOVED local definition, uses global now
             const funnelNeckInterfaceX = innerNeckX + SAND_GRAIN_RADIUS * 0.75 + 17; 
 
             function createFunnelWall(p1, p2, label, outwardAngleOffset) {
@@ -228,29 +228,87 @@
         }
 
         function populateSand(isFlippedState) {
-            sandParticles = [];
+            Composite.remove(engine.world, sandParticles); 
+            sandParticles = []; 
+
             const particleOptions = {
-                friction: 0.55, 
-                restitution: 0.01, 
-                density: 0.0045, 
+                friction: 0.55,
+                restitution: 0.01,
+                density: 0.0045,
                 render: { fillStyle: '#D2B48C' }
             };
-            
-            const localSpawnYStart = funnelTopStartY + SAND_GRAIN_RADIUS * 2 + wallThickness;
-            const localSpawnYEnd = funnelTopEndY - (SAND_GRAIN_RADIUS * 5 + wallThickness + hgNeckHeight * 2.0); 
-            const spawnWidth = hgBulbMaxWidth * 0.65; 
 
-            if (localSpawnYStart >= localSpawnYEnd) {
-                console.error("Spawn area invalid in populateSand. Check dimensions. Spawning higher as fallback.");
+            let spawnChamber_RefCapY, spawnChamber_RefNeckY; 
+            let spawnChamber_RefCapX, spawnChamber_RefNeckX; 
+            let y_spawn_particle_min_local, y_spawn_particle_max_local; 
+
+            const particleRadiusMargin = SAND_GRAIN_RADIUS * 1.1; 
+
+            if (!isFlippedState) { 
+                spawnChamber_RefCapY = funnelTopStartY;         
+                spawnChamber_RefNeckY = funnelTopEndY;          
+                spawnChamber_RefCapX = innerBulbX; // Now accesses global innerBulbX           
+                spawnChamber_RefNeckX = NECK_OPENING_WIDTH / 2; 
+
+                y_spawn_particle_min_local = spawnChamber_RefCapY + particleRadiusMargin; 
+                y_spawn_particle_max_local = spawnChamber_RefNeckY - particleRadiusMargin * 3; 
+            } else { 
+                spawnChamber_RefCapY = funnelBottomEndY;        
+                spawnChamber_RefNeckY = funnelBottomStartY;       
+                spawnChamber_RefCapX = innerBulbX; // Now accesses global innerBulbX
+                spawnChamber_RefNeckX = NECK_OPENING_WIDTH / 2;
+
+                y_spawn_particle_min_local = spawnChamber_RefNeckY + particleRadiusMargin * 3; 
+                y_spawn_particle_max_local = spawnChamber_RefCapY - particleRadiusMargin;    
+            }
+
+            if (y_spawn_particle_min_local >= y_spawn_particle_max_local) {
+                console.error("Spawn area Y range invalid in populateSand. Check dimensions or margins.",
+                              {y_spawn_particle_min_local, y_spawn_particle_max_local, isFlippedState});
+                const fallback_y_offset = isFlippedState ? 
+                                          ((funnelBottomStartY + funnelBottomEndY) / 2) : 
+                                          ((funnelTopStartY + funnelTopEndY) / 2);
                 for (let i = 0; i < NUM_SAND_PARTICLES; i++) {
-                    sandParticles.push(Bodies.circle(hgCenterX + (Math.random() - 0.5) * spawnWidth * 0.5, hgCenterY + funnelTopStartY + SAND_GRAIN_RADIUS * 10, SAND_GRAIN_RADIUS, particleOptions)); 
+                    const p_local_x = (Math.random() - 0.5) * NECK_OPENING_WIDTH * 0.5; 
+                    const p_local_y = fallback_y_offset + (Math.random() - 0.5) * NECK_OPENING_WIDTH; 
+
+                    const cosA = Math.cos(hourglassBody.angle);
+                    const sinA = Math.sin(hourglassBody.angle);
+                    const worldX = hgCenterX + (p_local_x * cosA - p_local_y * sinA);
+                    const worldY = hgCenterY + (p_local_x * sinA + p_local_y * cosA);
+                    sandParticles.push(Bodies.circle(worldX, worldY, SAND_GRAIN_RADIUS, particleOptions));
                 }
-            } else {
-                for (let i = 0; i < NUM_SAND_PARTICLES; i++) {
-                    const xJitter = (Math.random() - 0.5) * spawnWidth;
-                    let yPosLocal = localSpawnYStart + Math.random() * Math.abs(localSpawnYEnd - localSpawnYStart);
-                    let yPosWorld = isHourglassFlipped ? (hgCenterY - yPosLocal) : (hgCenterY + yPosLocal);
-                    sandParticles.push(Bodies.circle(hgCenterX + xJitter, yPosWorld, SAND_GRAIN_RADIUS, particleOptions));
+                Composite.add(engine.world, sandParticles);
+                return;
+            }
+            
+            let attempts = 0;
+            const maxAttemptsPerParticle = 10; 
+
+            for (let i = 0; i < NUM_SAND_PARTICLES; i++) {
+                let placed = false;
+                for(let attempt = 0; attempt < maxAttemptsPerParticle && !placed; attempt++) {
+                    attempts++;
+                    const p_local_y = y_spawn_particle_min_local + Math.random() * (y_spawn_particle_max_local - y_spawn_particle_min_local);
+                    let t; 
+                    if (Math.abs(spawnChamber_RefNeckY - spawnChamber_RefCapY) < 1e-6) { 
+                        t = 0; 
+                    } else {
+                        t = (p_local_y - spawnChamber_RefCapY) / (spawnChamber_RefNeckY - spawnChamber_RefCapY);
+                    }
+                    t = Math.max(0, Math.min(1, t));
+                    const funnel_half_width_at_y = spawnChamber_RefCapX + t * (spawnChamber_RefNeckX - spawnChamber_RefCapX);
+                    const max_jitter_magnitude = Math.max(0, funnel_half_width_at_y - particleRadiusMargin);
+                    const p_local_x = (Math.random() - 0.5) * 2 * max_jitter_magnitude;
+                    const cosAngle = Math.cos(hourglassBody.angle);
+                    const sinAngle = Math.sin(hourglassBody.angle);
+                    const worldX = hgCenterX + (p_local_x * cosAngle - p_local_y * sinAngle);
+                    const worldY = hgCenterY + (p_local_x * sinAngle + p_local_y * cosAngle);
+                    sandParticles.push(Bodies.circle(worldX, worldY, SAND_GRAIN_RADIUS, particleOptions));
+                    placed = true; 
+                }
+                 if (!placed) {
+                    // console.warn(`Could not place particle ${i} after ${maxAttemptsPerParticle} attempts.`);
                 }
             }
             Composite.add(engine.world, sandParticles);
@@ -268,7 +326,8 @@
             for (const particle of sandParticles) {
                 const localPosition = Vector.sub(particle.position, hourglassBody.position);
                 const rotatedPosition = Vector.rotate(localPosition, -hourglassBody.angle);
-                if (rotatedPosition.y < ( (neckTopY + neckBottomY) / 2 ) - neckBufferForDrainCheck ) { 
+                
+                if (rotatedPosition.y < (neckTopY - neckBufferForDrainCheck)) { 
                     particlesInUpperChamber++;
                 }
             }
@@ -286,7 +345,7 @@
         }
 
         function handleTimeUp() {
-            console.log("Time is up (60 seconds)!");
+            console.log(`Time is up (${TARGET_DRAIN_TIME_S} seconds)!`);
             timeUp = true;
             stopTimer(); 
             messageArea.textContent = "Time's Up!";
@@ -295,17 +354,24 @@
 
             if (isDrained) {
                 flipButton.disabled = false;
-                console.log("Sand drained within 60 seconds.");
+                console.log(`Sand drained within ${TARGET_DRAIN_TIME_S} seconds.`);
             } else {
                 flipButton.disabled = true; 
-                console.log("Sand did NOT drain within 60 seconds.");
+                console.log(`Sand did NOT drain within ${TARGET_DRAIN_TIME_S} seconds.`);
             }
         }
 
         function handleFlip() {
-            if (!isDrained && !timeUp) return; 
-            if (!isDrained && timeUp) {
-                console.log("Cannot flip, sand not drained and time is up.");
+            if (!isDrained && !timeUp) {
+                 console.log("Attempted to flip when not drained and time not up. Preventing.");
+                 return;
+            }
+            if (timeUp && !isDrained) {
+                 console.log("Time is up, but sand not drained. Flip disabled by timer logic.");
+                 return;
+            }
+             if (!isDrained) { 
+                console.log("Attempted to flip when not drained. Flip button should be disabled.");
                 return;
             }
 
@@ -316,13 +382,8 @@
             
             Body.setAngle(hourglassBody, hourglassBody.angle + Math.PI);
             Body.setPosition(hourglassBody, { x: hgCenterX, y: hgCenterY }); 
-
             isHourglassFlipped = !isHourglassFlipped; 
-            
-            Composite.remove(engine.world, sandParticles);
-            sandParticles = [];
             populateSand(isHourglassFlipped); 
-            
             resetTimer();
             startTimer();
         }
@@ -341,6 +402,7 @@
                 if (elapsedTimeSeconds >= TARGET_DRAIN_TIME_S) {
                     elapsedTimeSeconds = TARGET_DRAIN_TIME_S; 
                     timerDisplay.textContent = `${elapsedTimeSeconds.toFixed(1)}s`;
+                    clearInterval(timerInterval); 
                     handleTimeUp(); 
                 } else {
                     timerDisplay.textContent = `${elapsedTimeSeconds.toFixed(1)}s`;
