@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physics Hourglass Simulation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            color: #333;
+            overflow: hidden; 
+        }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        button {
+            padding: 12px 25px;
+            font-size: 16px;
+            color: white;
+            background-color: #007bff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #timerDisplay {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            background-color: #fff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-width: 80px;
+            text-align: center;
+        }
+        #simulationContainer {
+            width: 500px; 
+            height: 700px; 
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+            position: relative; 
+        }
+        canvas {
+            display: block; 
+            border-radius: 12px; 
+        }
+        .info-text {
+            margin-top: 15px;
+            font-size: 14px;
+            color: #555;
+            text-align: center;
+        }
+        #messageArea {
+            margin-top: 10px;
+            font-size: 16px;
+            color: #d9534f; /* Reddish for alerts */
+            font-weight: bold;
+            height: 20px; /* Reserve space */
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <div id="timerDisplay">0.0s</div>
+        <button id="flipButton" disabled>Flip Hourglass</button>
+    </div>
+    <div id="simulationContainer">
+    </div>
+    <div id="messageArea"></div>
+    <div class="info-text">
+        Target Drain Time: <span id="targetTimerCount"></span>s. Current Particles: <span id="particleCountInfo"></span>.
+    </div>
+
+    <script>
+        // Matter.js Aliases
+        const { Engine, Render, Runner, Bodies, Composite, Body, Vector, Events, World } = Matter;
+
+        // DOM Elements
+        const simulationContainer = document.getElementById('simulationContainer');
+        const flipButton = document.getElementById('flipButton');
+        const timerDisplay = document.getElementById('timerDisplay');
+        const particleCountInfo = document.getElementById('particleCountInfo');
+        const targetTimerCount = document.getElementById('targetTimerCount');        
+        const messageArea = document.getElementById('messageArea');
+
+        // Simulation constants
+        const NUM_SAND_PARTICLES = 2000; //was 1200
+        const SAND_GRAIN_RADIUS = 2.8 //was 2.8;
+        // --- MODIFIED LINE: Slightly widened NECK_OPENING_WIDTH to improve flow ---
+        const NECK_OPENING_WIDTH = (SAND_GRAIN_RADIUS * 2)*1.25; // Was 6.0 then 6.3
+        const TARGET_DRAIN_TIME_S = 20.0; 
+
+        particleCountInfo.textContent = NUM_SAND_PARTICLES;
+        targetTimerCount.textContent = TARGET_DRAIN_TIME_S;
+
+        // Hourglass dimensions
+        const canvasWidth = 500;
+        const canvasHeight = 700;
+        const hgTotalVisualHeight = 480; 
+        const hgBulbMaxWidth = 200; 
+        const hgNeckHeight = 25; //was 20
+        const wallThickness = 20; //was 10
+        const hgCenterX = canvasWidth / 2;
+        const hgCenterY = canvasHeight / 2; 
+
+        const bulbHeight = (hgTotalVisualHeight - hgNeckHeight) / 2; 
+        const neckTopY = -hgNeckHeight / 2;    
+        const neckBottomY = hgNeckHeight / 2;   
+        const funnelTopEndY = neckTopY;       
+        const funnelTopStartY = neckTopY - bulbHeight; 
+        const funnelBottomStartY = neckBottomY; 
+        const funnelBottomEndY = neckBottomY + bulbHeight; 
+
+        let engine;
+        let render;
+        let runner;
+        let hourglassBody;
+        let sandParticles = [];
+        let isHourglassFlipped = false; 
+        let isDrained = false;
+        let timerInterval;
+        let elapsedTimeSeconds = 0;
+        let timeUp = false;
+
+        function setupSimulation() {
+            engine = Engine.create();
+            engine.world.gravity.y = 1;
+            engine.positionIterations = 8; 
+            engine.velocityIterations = 6; 
+            engine.timing.timeScale = 0.9; 
+
+            render = Render.create({
+                element: simulationContainer,
+                engine: engine,
+                options: {
+                    width: canvasWidth,
+                    height: canvasHeight,
+                    wireframes: false,
+                    background: '#ffffff'
+                }
+            });
+            Render.run(render);
+
+            runner = Runner.create();
+            Runner.run(runner, engine);
+
+            hourglassBody = createHourglassBody();
+            Composite.add(engine.world, hourglassBody);
+
+            populateSand(isHourglassFlipped);
+            startTimer();
+
+            flipButton.addEventListener('click', handleFlip);
+
+            Events.on(engine, 'beforeUpdate', () => {
+                if (!isDrained && !timeUp) { 
+                    checkIfDrained();
+                }
+            });
+        }
+
+        function createHourglassBody() {
+            const parts = [];
+            const wallOptions = {
+                isStatic: true,
+                friction: 0.1, // was 0.05, 
+                restitution: 0.01, 
+                render: { fillStyle: '#c0c0c0', strokeStyle: '#aaaaaa', lineWidth: 0 }
+            };
+
+            const innerNeckX = NECK_OPENING_WIDTH / 2; 
+            const innerBulbX = hgBulbMaxWidth / 2;
+            const funnelNeckInterfaceX = innerNeckX + SAND_GRAIN_RADIUS * 0.75 + 17; 
+
+            function createFunnelWall(p1, p2, label, outwardAngleOffset) {
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const length = Math.sqrt(dx * dx + dy * dy);
+                const angle = Math.atan2(dy, dx); 
+
+                const cx_edge = (p1.x + p2.x) / 2;
+                const cy_edge = (p1.y + p2.y) / 2;
+                const angle_perp = angle + outwardAngleOffset;
+                const cx_wall = cx_edge + (wallThickness / 2) * Math.cos(angle_perp);
+                const cy_wall = cy_edge + (wallThickness / 2) * Math.sin(angle_perp);
+                
+                return Bodies.rectangle(cx_wall, cy_wall, length, wallThickness, { ...wallOptions, angle: angle, label: label });
+            }
+
+            parts.push(createFunnelWall({ x: funnelNeckInterfaceX, y: funnelTopEndY }, { x: innerBulbX, y: funnelTopStartY }, "TRFW", -Math.PI / 2));
+            parts.push(createFunnelWall({ x: -funnelNeckInterfaceX, y: funnelTopEndY }, { x: -innerBulbX, y: funnelTopStartY }, "TLFW", Math.PI / 2));
+            parts.push(createFunnelWall({ x: funnelNeckInterfaceX, y: funnelBottomStartY }, { x: innerBulbX, y: funnelBottomEndY }, "BRFW", Math.PI / 2));
+            parts.push(createFunnelWall({ x: -funnelNeckInterfaceX, y: funnelBottomStartY }, { x: -innerBulbX, y: funnelBottomEndY }, "BLFW", -Math.PI / 2));
+            
+            if (hgNeckHeight > 0) {
+                 parts.push(Bodies.rectangle(innerNeckX + wallThickness / 2, 0, wallThickness, hgNeckHeight + wallThickness, { ...wallOptions, label: "NeckRightWall" })); 
+                 parts.push(Bodies.rectangle(-innerNeckX - wallThickness / 2, 0, wallThickness, hgNeckHeight + wallThickness, { ...wallOptions, label: "NeckLeftWall" }));
+            }
+
+            parts.push(Bodies.rectangle(0, funnelTopStartY - wallThickness / 2, innerBulbX * 2 + wallThickness * 2, wallThickness, { ...wallOptions, label: "TopCap" }));
+            parts.push(Bodies.rectangle(0, funnelBottomEndY + wallThickness / 2, innerBulbX * 2 + wallThickness * 2, wallThickness, { ...wallOptions, label: "BottomCap" }));
+
+            const compoundBody = Body.create({ parts: parts, isStatic: true, friction: wallOptions.friction, restitution: wallOptions.restitution });
+            Body.setPosition(compoundBody, { x: hgCenterX, y: hgCenterY });
+            return compoundBody;
+        }
+
+        function populateSand(isFlippedState) {
+            sandParticles = [];
+            const particleOptions = {
+                friction: 0.55, 
+                restitution: 0.01, 
+                density: 0.0045, 
+                render: { fillStyle: '#D2B48C' }
+            };
+            
+            const localSpawnYStart = funnelTopStartY + SAND_GRAIN_RADIUS * 2 + wallThickness;
+            const localSpawnYEnd = funnelTopEndY - (SAND_GRAIN_RADIUS * 5 + wallThickness + hgNeckHeight * 2.0); 
+            const spawnWidth = hgBulbMaxWidth * 0.65; 
+
+            if (localSpawnYStart >= localSpawnYEnd) {
+                console.error("Spawn area invalid in populateSand. Check dimensions. Spawning higher as fallback.");
+                for (let i = 0; i < NUM_SAND_PARTICLES; i++) {
+                    sandParticles.push(Bodies.circle(hgCenterX + (Math.random() - 0.5) * spawnWidth * 0.5, hgCenterY + funnelTopStartY + SAND_GRAIN_RADIUS * 10, SAND_GRAIN_RADIUS, particleOptions)); 
+                }
+            } else {
+                for (let i = 0; i < NUM_SAND_PARTICLES; i++) {
+                    const xJitter = (Math.random() - 0.5) * spawnWidth;
+                    let yPosLocal = localSpawnYStart + Math.random() * Math.abs(localSpawnYEnd - localSpawnYStart);
+                    let yPosWorld = isHourglassFlipped ? (hgCenterY - yPosLocal) : (hgCenterY + yPosLocal);
+                    sandParticles.push(Bodies.circle(hgCenterX + xJitter, yPosWorld, SAND_GRAIN_RADIUS, particleOptions));
+                }
+            }
+            Composite.add(engine.world, sandParticles);
+        }
+        
+        function checkIfDrained() {
+            if (sandParticles.length === 0) {
+                isDrained = true; 
+                return;
+            }
+
+            let particlesInUpperChamber = 0;
+            const neckBufferForDrainCheck = NECK_OPENING_WIDTH * 0.8; 
+
+            for (const particle of sandParticles) {
+                const localPosition = Vector.sub(particle.position, hourglassBody.position);
+                const rotatedPosition = Vector.rotate(localPosition, -hourglassBody.angle);
+                if (rotatedPosition.y < ( (neckTopY + neckBottomY) / 2 ) - neckBufferForDrainCheck ) { 
+                    particlesInUpperChamber++;
+                }
+            }
+            
+            const drainThreshold = Math.max(5, NUM_SAND_PARTICLES * 0.015); 
+            if (particlesInUpperChamber <= drainThreshold && elapsedTimeSeconds > 5) { 
+                if (!isDrained) { 
+                    console.log(`Sand appears drained at ${elapsedTimeSeconds.toFixed(1)}s. Particles in top: ${particlesInUpperChamber}`);
+                }
+                isDrained = true;
+                if (timeUp) { 
+                    flipButton.disabled = false;
+                }
+            }
+        }
+
+        function handleTimeUp() {
+            console.log("Time is up (60 seconds)!");
+            timeUp = true;
+            stopTimer(); 
+            messageArea.textContent = "Time's Up!";
+            
+            checkIfDrained(); 
+
+            if (isDrained) {
+                flipButton.disabled = false;
+                console.log("Sand drained within 60 seconds.");
+            } else {
+                flipButton.disabled = true; 
+                console.log("Sand did NOT drain within 60 seconds.");
+            }
+        }
+
+        function handleFlip() {
+            if (!isDrained && !timeUp) return; 
+            if (!isDrained && timeUp) {
+                console.log("Cannot flip, sand not drained and time is up.");
+                return;
+            }
+
+            flipButton.disabled = true;
+            isDrained = false;
+            timeUp = false;
+            messageArea.textContent = "";
+            
+            Body.setAngle(hourglassBody, hourglassBody.angle + Math.PI);
+            Body.setPosition(hourglassBody, { x: hgCenterX, y: hgCenterY }); 
+
+            isHourglassFlipped = !isHourglassFlipped; 
+            
+            Composite.remove(engine.world, sandParticles);
+            sandParticles = [];
+            populateSand(isHourglassFlipped); 
+            
+            resetTimer();
+            startTimer();
+        }
+
+        function startTimer() {
+            if (timerInterval) clearInterval(timerInterval);
+            elapsedTimeSeconds = 0; 
+            timeUp = false; 
+            isDrained = false; 
+            messageArea.textContent = "";
+            flipButton.disabled = true; 
+
+            timerDisplay.textContent = `${elapsedTimeSeconds.toFixed(1)}s`;
+            timerInterval = setInterval(() => {
+                elapsedTimeSeconds += 0.1;
+                if (elapsedTimeSeconds >= TARGET_DRAIN_TIME_S) {
+                    elapsedTimeSeconds = TARGET_DRAIN_TIME_S; 
+                    timerDisplay.textContent = `${elapsedTimeSeconds.toFixed(1)}s`;
+                    handleTimeUp(); 
+                } else {
+                    timerDisplay.textContent = `${elapsedTimeSeconds.toFixed(1)}s`;
+                }
+            }, 100);
+        }
+
+        function stopTimer() {
+            clearInterval(timerInterval);
+        }
+
+        function resetTimer() {
+            stopTimer();
+            elapsedTimeSeconds = 0;
+            timerDisplay.textContent = "0.0s";
+        }
+
+        // Initialize
+        setupSimulation();
+
+    </script>
+</body>
+</html>
